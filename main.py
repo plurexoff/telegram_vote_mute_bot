@@ -22,10 +22,10 @@ dp = Dispatcher()
 
 active_votes = {}
 
-VOTE_DURATION = 300
-MUTE_DURATION = 300
-VOTES_NEEDED_MUTE = 3
-VOTES_NEEDED_BAN = 5
+VOTE_DURATION = 60
+MUTE_DURATION = 1800
+VOTES_NEEDED_MUTE = 1
+VOTES_NEEDED_BAN = 1
 
 
 @dp.message(Command(commands=['start']))
