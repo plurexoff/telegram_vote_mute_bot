@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
 import asyncio
 import logging
@@ -21,57 +18,74 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 active_votes = {}
+message_tasks = {}
 
-VOTE_DURATION = 60
-MUTE_DURATION = 1800
-VOTES_NEEDED_MUTE = 1
-VOTES_NEEDED_BAN = 1
+VOTE_DURATION = 300
+MUTE_DURATION = 300
+VOTES_NEEDED_MUTE = 3
+VOTES_NEEDED_BAN = 5
+AUTO_DELETE_TIMEOUT = 300  # Удалять сообщения через 5 минут (можно менять)
+
+
+async def auto_delete_message(chat_id: int, message_id: int, delay: int):
+    """Автоматически удаляет сообщение через delay секунд"""
+    try:
+        await asyncio.sleep(delay)
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"Сообщение {message_id} удалено из чата {chat_id}")
+    except Exception as e:
+        logger.error(f"Ошибка при удалении сообщения: {e}")
 
 
 @dp.message(Command(commands=['start']))
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "👋 Привет! Я бот для голосования о мьюте и бане участников.\n\n"
-        "📋 Доступные команды:\n"
-        "/vote_reply - Голосование о мьюте (ответьте на сообщение)\n"
-        "/ban_reply - Голосование о бане (ответьте на сообщение)\n"
-        "/help - Помощь"
+    response = await message.answer(
+        "Привет! Я модератор для голосования в вашей группе.\n\n"
+        "Доступные команды:\n"
+        "/vote_mute - Голосование о мьюте (ответьте на сообщение)\n"
+        "/vote_ban - Голосование о бане (ответьте на сообщение)\n"
+        "/help - Справка"
     )
+    # Запускаем автоудаление этого сообщения
+    asyncio.create_task(auto_delete_message(message.chat.id, response.message_id, AUTO_DELETE_TIMEOUT))
 
 
 @dp.message(Command(commands=['help']))
 async def cmd_help(message: types.Message):
     help_text = (
-        "ℹ️ *Инструкция по использованию:*\n\n"
-        "🔇 *МЬЮТ (временное ограничение письма):*\n"
-        "1️⃣ Ответьте на сообщение пользователя\n"
-        "2️⃣ Напишите /vote_reply\n"
-        "3️⃣ Участники голосуют (нужно минимум 3 голоса \"За\")\n"
-        "4️⃣ Пользователь замьючивается на 5 минут\n\n"
-        "🚫 *БАН (полное удаление из группы):*\n"
-        "1️⃣ Ответьте на сообщение пользователя\n"
-        "2️⃣ Напишите /ban_reply\n"
-        "3️⃣ Участники голосуют (нужно минимум 5 голосов \"За\")\n"
-        "4️⃣ Пользователь будет удалён из группы\n\n"
-        f"⚙️ *Параметры:*\n"
-        f"• Длительность голосования: {VOTE_DURATION // 60} минут\n"
+        "Справка по командам:\n\n"
+        "МЬЮТ (временное ограничение):\n"
+        "1. Ответьте на сообщение пользователя\n"
+        "2. Напишите /vote_mute\n"
+        "3. Участники голосуют (нужно 3 голоса)\n"
+        "4. Пользователь замьючивается на 5 минут\n\n"
+        "БАН (удаление из группы):\n"
+        "1. Ответьте на сообщение пользователя\n"
+        "2. Напишите /vote_ban\n"
+        "3. Участники голосуют (нужно 5 голосов)\n"
+        "4. Пользователь удаляется из группы\n\n"
+        f"Параметры:\n"
+        f"• Длительность голосования: {VOTE_DURATION // 60} мин\n"
         f"• Голосов для мьюта: {VOTES_NEEDED_MUTE}\n"
-        f"• Голосов для бана: {VOTES_NEEDED_BAN}\n\n"
-        "⚠️ *Важно:* Бот должен быть администратором с правами на ограничение и удаление участников!"
+        f"• Голосов для бана: {VOTES_NEEDED_BAN}"
     )
-    await message.answer(help_text, parse_mode='Markdown')
+    response = await message.answer(help_text)
+    # Запускаем автоудаление этого сообщения
+    asyncio.create_task(auto_delete_message(message.chat.id, response.message_id, AUTO_DELETE_TIMEOUT))
 
 
 async def start_vote(message: types.Message, vote_type: str):
     chat_id = message.chat.id
     
     if chat_id in active_votes:
-        await message.answer("⚠️ В этом чате уже идёт голосование! Дождитесь его окончания.")
+        response = await message.answer("В этом чате уже идёт голосование. Подождите окончания.")
+        asyncio.create_task(auto_delete_message(chat_id, response.message_id, 30))
         return
     
     if not message.reply_to_message:
-        cmd_name = "/vote_reply" if vote_type == "mute" else "/ban_reply"
-        await message.answer(f"❌ Используйте reply на сообщение пользователя и напишите {cmd_name}!")
+        cmd_name = "/vote_mute" if vote_type == "mute" else "/vote_ban"
+        response = await message.answer(f"Используйте reply на сообщение пользователя и напишите {cmd_name}")
+        asyncio.create_task(auto_delete_message(chat_id, response.message_id, 30))
         return
     
     target_user = message.reply_to_message.from_user
@@ -81,41 +95,47 @@ async def start_vote(message: types.Message, vote_type: str):
     try:
         member = await bot.get_chat_member(chat_id=chat_id, user_id=target_user_id)
         if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
-            await message.answer("❌ Нельзя проголосовать за мьют/бан администратора!")
+            response = await message.answer("Нельзя голосовать против администратора.")
+            asyncio.create_task(auto_delete_message(chat_id, response.message_id, 30))
             return
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса: {e}")
     
     if target_user_id == message.from_user.id:
-        await message.answer("❌ Нельзя голосовать за мьют/бан самого себя!")
+        response = await message.answer("Нельзя голосовать против себя.")
+        asyncio.create_task(auto_delete_message(chat_id, response.message_id, 30))
         return
     
     if vote_type == "mute":
         votes_needed = VOTES_NEEDED_MUTE
-        emoji_type = "🔇"
         type_text = "мьюте"
-        title = "о мьюте"
+        title = "Голосование о мьюте"
     else:
         votes_needed = VOTES_NEEDED_BAN
-        emoji_type = "🚫"
         type_text = "бане"
-        title = "о бане"
+        title = "Голосование о бане"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"👍 За {type_text}", callback_data=f"vote_yes_{vote_type}_{target_user_id}")],
-        [InlineKeyboardButton(text="👎 Против", callback_data=f"vote_no_{vote_type}_{target_user_id}")],
-        [InlineKeyboardButton(text="🤷 Воздержался", callback_data=f"vote_abstain_{vote_type}_{target_user_id}")]
+        [InlineKeyboardButton(text="За", callback_data=f"vote_yes_{vote_type}_{target_user_id}")],
+        [InlineKeyboardButton(text="Против", callback_data=f"vote_no_{vote_type}_{target_user_id}")],
+        [InlineKeyboardButton(text="Воздержался", callback_data=f"vote_abstain_{vote_type}_{target_user_id}")]
     ])
     
     vote_text = (
-        f"{emoji_type} *Голосование {title}!*\n\n"
-        f"👤 Пользователь: {target_user_name}\n"
-        f"⏱ Время: {VOTE_DURATION // 60} минут\n"
-        f"🎯 Нужно голосов \"За\": {votes_needed}\n\n"
-        "Выберите один из вариантов ниже:"
+        f"{title}\n\n"
+        f"Пользователь: {target_user_name}\n"
+        f"Время: {VOTE_DURATION // 60} минут\n"
+        f"Нужно голосов: {votes_needed}\n\n"
+        "Выберите вариант:"
     )
     
-    sent_message = await message.answer(vote_text, reply_markup=keyboard, parse_mode='Markdown')
+    sent_message = await message.answer(vote_text, reply_markup=keyboard)
+    
+    # Удалим исходную команду
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.error(f"Не удалось удалить исходное сообщение: {e}")
     
     active_votes[chat_id] = {
         'type': vote_type,
@@ -133,13 +153,13 @@ async def start_vote(message: types.Message, vote_type: str):
     asyncio.create_task(end_vote_timer(chat_id))
 
 
-@dp.message(Command(commands=['vote_reply']))
-async def cmd_vote_reply(message: types.Message):
+@dp.message(Command(commands=['vote_mute']))
+async def cmd_vote_mute(message: types.Message):
     await start_vote(message, "mute")
 
 
-@dp.message(Command(commands=['ban_reply']))
-async def cmd_ban_reply(message: types.Message):
+@dp.message(Command(commands=['vote_ban']))
+async def cmd_vote_ban(message: types.Message):
     await start_vote(message, "ban")
 
 
@@ -149,13 +169,13 @@ async def process_vote(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     if chat_id not in active_votes:
-        await callback.answer("❌ Голосование не активно", show_alert=True)
+        await callback.answer("Голосование не активно", show_alert=True)
         return
     
     vote_data = active_votes[chat_id]
     
     if user_id in vote_data['voters']:
-        await callback.answer("⚠️ Вы уже проголосовали!", show_alert=True)
+        await callback.answer("Вы уже проголосовали", show_alert=True)
         return
     
     parts = callback.data.split('_')
@@ -164,54 +184,49 @@ async def process_vote(callback: types.CallbackQuery):
     target_user_id = int(parts[3])
     
     if target_user_id != vote_data['target_user_id']:
-        await callback.answer("❌ Это голосование уже неактуально", show_alert=True)
+        await callback.answer("Это голосование неактуально", show_alert=True)
         return
     
     if vote_type != vote_data['type']:
-        await callback.answer("❌ Это голосование уже неактуально", show_alert=True)
+        await callback.answer("Это голосование неактуально", show_alert=True)
         return
     
     if vote_option == 'yes':
         vote_data['votes_yes'] += 1
-        emoji = "👍"
         text = f"За {vote_data['type']}"
     elif vote_option == 'no':
         vote_data['votes_no'] += 1
-        emoji = "👎"
         text = "Против"
     else:
         vote_data['votes_abstain'] += 1
-        emoji = "🤷"
         text = "Воздержался"
     
     vote_data['voters'].add(user_id)
     
     if vote_data['type'] == 'mute':
-        emoji_type = "🔇"
         type_name = "мьюте"
     else:
-        emoji_type = "🚫"
         type_name = "бане"
     
     current_text = (
-        f"{emoji_type} *Голосование о {type_name}*\n\n"
-        f"👤 Пользователь: {vote_data['target_user_name']}\n"
-        f"⏱ Время: {VOTE_DURATION // 60} минут\n\n"
-        f"👍 За {type_name}: {vote_data['votes_yes']}\n"
-        f"👎 Против: {vote_data['votes_no']}\n"
-        f"🤷 Воздержались: {vote_data['votes_abstain']}\n"
-        f"👥 Всего голосов: {len(vote_data['voters'])}\n\n"
-        f"🎯 Нужно голосов \"За\": {vote_data['votes_needed']}"
+        f"Голосование о {type_name}\n\n"
+        f"Пользователь: {vote_data['target_user_name']}\n"
+        f"Время: {VOTE_DURATION // 60} минут\n\n"
+        f"За: {vote_data['votes_yes']}\n"
+        f"Против: {vote_data['votes_no']}\n"
+        f"Воздержались: {vote_data['votes_abstain']}\n"
+        f"Всего голосов: {len(vote_data['voters'])}\n\n"
+        f"Нужно голосов: {vote_data['votes_needed']}"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"👍 За {type_name}", callback_data=f"vote_yes_{vote_data['type']}_{target_user_id}")],
-        [InlineKeyboardButton(text="👎 Против", callback_data=f"vote_no_{vote_data['type']}_{target_user_id}")],
-        [InlineKeyboardButton(text="🤷 Воздержался", callback_data=f"vote_abstain_{vote_data['type']}_{target_user_id}")]
+        [InlineKeyboardButton(text="За", callback_data=f"vote_yes_{vote_data['type']}_{target_user_id}")],
+        [InlineKeyboardButton(text="Против", callback_data=f"vote_no_{vote_data['type']}_{target_user_id}")],
+        [InlineKeyboardButton(text="Воздержался", callback_data=f"vote_abstain_{vote_data['type']}_{target_user_id}")]
     ])
     
-    await callback.message.edit_text(current_text, reply_markup=keyboard, parse_mode='Markdown')
-    await callback.answer(f"✅ Вы выбрали: {emoji} {text}", show_alert=False)
+    await callback.message.edit_text(current_text, reply_markup=keyboard)
+    await callback.answer(f"Выбрано: {text}", show_alert=False)
 
 
 async def end_vote_timer(chat_id: int):
@@ -237,26 +252,24 @@ async def finalize_vote(chat_id: int):
     votes_needed = vote_data['votes_needed']
     
     if vote_type == 'mute':
-        emoji_type = "🔇"
         type_name = "мьюте"
         type_action = "мьют"
     else:
-        emoji_type = "🚫"
         type_name = "бане"
         type_action = "бан"
     
     result_text = (
-        f"{emoji_type} *Голосование завершено!*\n\n"
-        f"👤 Пользователь: {target_user_name}\n\n"
-        f"👍 За {type_name}: {votes_yes}\n"
-        f"👎 Против: {votes_no}\n"
-        f"🤷 Воздержались: {votes_abstain}\n"
-        f"👥 Всего голосов: {total_votes}"
+        f"Голосование завершено\n\n"
+        f"Пользователь: {target_user_name}\n\n"
+        f"За: {votes_yes}\n"
+        f"Против: {votes_no}\n"
+        f"Воздержались: {votes_abstain}\n"
+        f"Всего: {total_votes}"
     )
     
     if votes_yes >= votes_needed:
         if vote_type == 'mute':
-            result_text += f"\n\n✅ *МЬЮТ АКТИВИРОВАН!*\n🔇 {target_user_name} замьючен на {MUTE_DURATION // 60} минут"
+            result_text += f"\n\nРЕЗУЛЬТАТ: Мьют активирован\n{target_user_name} замьючен на {MUTE_DURATION // 60} минут"
             
             try:
                 until_date = datetime.now() + timedelta(seconds=MUTE_DURATION)
@@ -268,11 +281,11 @@ async def finalize_vote(chat_id: int):
                 )
                 logger.info(f"Пользователь {target_user_id} замьючен в чате {chat_id}")
             except Exception as e:
-                result_text += f"\n\n⚠️ Ошибка при мьюте: {str(e)}"
+                result_text += f"\nОшибка при мьюте: {str(e)}"
                 logger.error(f"Не удалось замьютить пользователя {target_user_id}: {e}")
         
         else:
-            result_text += f"\n\n✅ *БАН АКТИВИРОВАН!*\n🚫 {target_user_name} удалён из группы"
+            result_text += f"\n\nРЕЗУЛЬТАТ: Бан активирован\n{target_user_name} удален из группы"
             
             try:
                 await bot.ban_chat_member(
@@ -281,16 +294,19 @@ async def finalize_vote(chat_id: int):
                 )
                 logger.info(f"Пользователь {target_user_id} забанен в чате {chat_id}")
             except Exception as e:
-                result_text += f"\n\n⚠️ Ошибка при бане: {str(e)}"
+                result_text += f"\nОшибка при бане: {str(e)}"
                 logger.error(f"Не удалось забанить пользователя {target_user_id}: {e}")
     else:
-        result_text += f"\n\n❌ *{type_action.upper()} НЕ АКТИВИРОВАН*\n❌ Недостаточно голосов (нужно: {votes_needed}, получено: {votes_yes})"
+        result_text += f"\n\nРЕЗУЛЬТАТ: {type_action.upper()} не активирован\nНедостаточно голосов ({votes_yes} из {votes_needed})"
     
-    await bot.send_message(chat_id, result_text, parse_mode='Markdown')
+    response = await bot.send_message(chat_id, result_text)
+    
+    # Удалим сообщение с результатом через время
+    asyncio.create_task(auto_delete_message(chat_id, response.message_id, AUTO_DELETE_TIMEOUT))
 
 
 async def main():
-    logger.info("🤖 Бот запущен!")
+    logger.info("Бот запущен")
     await dp.start_polling(bot)
 
 
