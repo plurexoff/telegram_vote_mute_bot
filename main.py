@@ -21,9 +21,9 @@ active_votes = {}
 message_tasks = {}
 
 VOTE_DURATION = 300
-MUTE_DURATION = 300
+MUTE_DURATION = 18000
 VOTES_NEEDED_MUTE = 3
-VOTES_NEEDED_BAN = 5
+VOTES_NEEDED_BAN = 3
 AUTO_DELETE_TIMEOUT = 300  # Удалять сообщения через 5 минут (можно менять)
 
 
